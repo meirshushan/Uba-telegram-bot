@@ -1,69 +1,54 @@
 import os
-import asyncio
 import requests
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
-from aiohttp import web
+import time
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-PORT = int(os.environ.get("PORT", 8080))
+BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 user_histories = {}
 
-SYSTEM_PROMPT = """אתה ה-Universal Business Architect (UBA). סוכן בינה מלאכותית ברמה הגבוהה ביותר, פועל בתוך Telegram. תפקידך לאבחן צרכים עסקיים, לבנות פתרונות בזמן אמת, ולנהל תקשורת חדה ומניעה למכירה.
-חוקים: לעולם אל תכתוב יותר מ-3 פסקאות קצרות. כל הודעה מסתיימת בשאלה או CTA. משפטים קצרים ודחוסים. אתה שותף עסקי, לא תוכנה.
-כשלקוח חדש פונה - אבחן אותו ב-3 שאלות אחת אחרי השנייה.
-כשמדברים על מחיר - הפעל מוד [The Closer].
-כשצריך תוכנית - הפעל מוד [The Strategist].
-כשצריך תוכן - הפעל מוד [The Creative Director].
-כשצריך ביצוע טכני - הפעל מוד [The Operations Manager]."""
+SYSTEM_PROMPT = """אתה ה-Universal Business Architect (UBA). סוכן בינה מלאכותית ברמה הגבוהה ביותר. תפקידך לאבחן צרכים עסקיים ולנהל תקשורת חדה ומניעה למכירה.
+חוקים: לא יותר מ-3 פסקאות. כל הודעה מסתיימת בשאלה. משפטים קצרים. אתה שותף עסקי.
+כשלקוח חדש פונה - שאל 3 שאלות אחת אחרי השנייה.
+כשמדברים על מחיר - [The Closer]. כשצריך תוכנית - [The Strategist]. כשצריך תוכן - [The Creative Director]."""
+
+def send_message(chat_id, text):
+    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": text})
 
 def ask_claude(messages):
-    response = requests.post(
+    r = requests.post(
         "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json"
-        },
-        json={
-            "model": "claude-opus-4-5",
-            "max_tokens": 1000,
-            "system": SYSTEM_PROMPT,
-            "messages": messages
-        }
+        headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+        json={"model": "claude-opus-4-5", "max_tokens": 1000, "system": SYSTEM_PROMPT, "messages": messages}
     )
-    return response.json()["content"][0]["text"]
+    return r.json()["content"][0]["text"]
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_message = update.message.text
-    if user_id not in user_histories:
-        user_histories[user_id] = []
-    user_histories[user_id].append({"role": "user", "content": user_message})
-    if len(user_histories[user_id]) > 20:
-        user_histories[user_id] = user_histories[user_id][-20:]
-    reply = ask_claude(user_histories[user_id])
-    user_histories[user_id].append({"role": "assistant", "content": reply})
-    await update.message.reply_text(reply)
-
-async def health(request):
-    return web.Response(text="UBA Bot is running!")
-
-async def main():
-    app_web = web.Application()
-    app_web.router.add_get('/', health)
-    runner = web.AppRunner(app_web)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    await asyncio.Event().wait()
+def main():
+    offset = 0
+    print("Bot started!")
+    while True:
+        try:
+            r = requests.get(f"{BASE_URL}/getUpdates", params={"offset": offset, "timeout": 30}, timeout=35)
+            updates = r.json().get("result", [])
+            for update in updates:
+                offset = update["update_id"] + 1
+                msg = update.get("message", {})
+                text = msg.get("text", "")
+                chat_id = msg.get("chat", {}).get("id")
+                if not text or not chat_id or text.startswith("/"):
+                    continue
+                if chat_id not in user_histories:
+                    user_histories[chat_id] = []
+                user_histories[chat_id].append({"role": "user", "content": text})
+                if len(user_histories[chat_id]) > 20:
+                    user_histories[chat_id] = user_histories[chat_id][-20:]
+                reply = ask_claude(user_histories[chat_id])
+                user_histories[chat_id].append({"role": "assistant", "content": reply})
+                send_message(chat_id, reply)
+        except Exception as e:
+            print(f"Error: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
