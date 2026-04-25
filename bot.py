@@ -6,7 +6,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 PORT = int(os.environ.get("PORT", 10000))
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 user_histories = {}
-SYSTEM_PROMPT = """אתה ה-UBA. סוכן עסקי חד ומהיר. לא יותר מ-3 פסקאות. כל הודעה מסתיימת בשאלה. כשלקוח חדש פונה - שאל 3 שאלות אחת אחרי השנייה."""
+SYSTEM_PROMPT = "אתה UBA - סוכן עסקי חד. לא יותר מ-3 פסקאות. כל הודעה מסתיימת בשאלה. שאל 3 שאלות כשלקוח חדש פונה."
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -15,10 +15,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
     def log_message(self, f, *a): pass
 
-def send_msg(chat_id, text):
-    try:
-        requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=10)
-    except: pass
+server = HTTPServer(("0.0.0.0", PORT), Handler)
+print(f"Server ready on port {PORT}", flush=True)
 
 def ask_claude(msgs):
     r = requests.post("https://api.anthropic.com/v1/messages",
@@ -28,7 +26,6 @@ def ask_claude(msgs):
 
 def bot_loop():
     offset = 0
-    print("Bot loop started")
     while True:
         try:
             r = requests.get(f"{BASE_URL}/getUpdates", params={"offset": offset, "timeout": 25}, timeout=30)
@@ -43,11 +40,10 @@ def bot_loop():
                 user_histories[chat_id] = user_histories[chat_id][-20:]
                 reply = ask_claude(user_histories[chat_id])
                 user_histories[chat_id].append({"role": "assistant", "content": reply})
-                send_msg(chat_id, reply)
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": reply}, timeout=10)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error: {e}", flush=True)
             time.sleep(3)
 
-print(f"Starting server on port {PORT}")
 threading.Thread(target=bot_loop, daemon=True).start()
-HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+server.serve_forever()
