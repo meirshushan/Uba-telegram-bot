@@ -1,6 +1,6 @@
 import os
 import asyncio
-from anthropic import Anthropic
+import requests
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from aiohttp import web
@@ -9,22 +9,32 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 PORT = int(os.environ.get("PORT", 8080))
 
-client = Anthropic(api_key=ANTHROPIC_API_KEY)
 user_histories = {}
 
 SYSTEM_PROMPT = """אתה ה-Universal Business Architect (UBA). סוכן בינה מלאכותית ברמה הגבוהה ביותר, פועל בתוך Telegram. תפקידך לאבחן צרכים עסקיים, לבנות פתרונות בזמן אמת, ולנהל תקשורת חדה ומניעה למכירה.
-
-חוקים:
-- לעולם אל תכתוב יותר מ-3 פסקאות קצרות
-- כל הודעה מסתיימת בשאלה או CTA
-- משפטים קצרים ודחוסים
-- אתה שותף עסקי, לא תוכנה
-
+חוקים: לעולם אל תכתוב יותר מ-3 פסקאות קצרות. כל הודעה מסתיימת בשאלה או CTA. משפטים קצרים ודחוסים. אתה שותף עסקי, לא תוכנה.
 כשלקוח חדש פונה - אבחן אותו ב-3 שאלות אחת אחרי השנייה.
 כשמדברים על מחיר - הפעל מוד [The Closer].
 כשצריך תוכנית - הפעל מוד [The Strategist].
-כשצריך תוכן/קופי - הפעל מוד [The Creative Director].
+כשצריך תוכן - הפעל מוד [The Creative Director].
 כשצריך ביצוע טכני - הפעל מוד [The Operations Manager]."""
+
+def ask_claude(messages):
+    response = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        },
+        json={
+            "model": "claude-opus-4-5",
+            "max_tokens": 1000,
+            "system": SYSTEM_PROMPT,
+            "messages": messages
+        }
+    )
+    return response.json()["content"][0]["text"]
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -34,15 +44,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_histories[user_id].append({"role": "user", "content": user_message})
     if len(user_histories[user_id]) > 20:
         user_histories[user_id] = user_histories[user_id][-20:]
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1000,
-        system=SYSTEM_PROMPT,
-        messages=user_histories[user_id]
-    )
-    assistant_message = response.content[0].text
-    user_histories[user_id].append({"role": "assistant", "content": assistant_message})
-    await update.message.reply_text(assistant_message)
+    reply = ask_claude(user_histories[user_id])
+    user_histories[user_id].append({"role": "assistant", "content": reply})
+    await update.message.reply_text(reply)
 
 async def health(request):
     return web.Response(text="UBA Bot is running!")
